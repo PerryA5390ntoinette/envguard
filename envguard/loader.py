@@ -35,3 +35,24 @@ def load_env_file(path: str | Path) -> dict[str, str]:
                 key, value = result
                 env_vars[key] = value
     return env_vars
+
+
+def load_env_files(*paths: str | Path) -> dict[str, str]:
+    """Load multiple .env files and merge them into a single dictionary.
+
+    Files are processed in order; later files take precedence over earlier
+    ones when the same key appears in multiple files.
+
+    Args:
+        *paths: One or more paths to .env files.
+
+    Returns:
+        A merged dictionary of all key-value pairs.
+
+    Raises:
+        FileNotFoundError: If any of the specified .env files do not exist.
+    """
+    merged: dict[str, str] = {}
+    for path in paths:
+        merged.update(load_env_file(path))
+    return merged
