@@ -1,91 +1,85 @@
 """Core validation logic for envguard."""
 
+from __future__ import annotations
+
 import re
 from dataclasses import dataclass, field
-from urllib.parse import urlparse
+from typing import Dict, List, Optional
 
 from envguard.schema import EnvSchema, VariableSchema
 
 
 @dataclass
 class ValidationResult:
+    level: str  # 'error' | 'warning' | 'info'
     variable: str
-    passed: bool
     message: str
-    level: str = "error"  # "error" or "warning"
 
 
 @dataclass
 class ValidationReport:
-    results: list[ValidationResult] = field(default_factory=list)
+    errors: List[ValidationResult] = field(default_factory=list)
+    warnings: List[ValidationResult] = field(default_factory=list)
+    passed: List[ValidationResult] = field(default_factory=list)
+
+    def add_error(self, variable: str, message: str) -> None:
+        self.errors.append(ValidationResult(level="error", variable=variable, message=message))
+
+    def add_warning(self, variable: str, message: str) -> None:
+        self.warnings.append(ValidationResult(level="warning", variable=variable, message=message))
+
+    def add_passed(self, variable: str, message: str = "OK") -> None:
+        self.passed.append(ValidationResult(level="info", variable=variable, message=message))
 
     @property
-    def errors(self) -> list[ValidationResult]:
-        return [r for r in self.results if not r.passed and r.level == "error"]
-
-    @property
-    def warnings(self) -> list[ValidationResult]:
-        return [r for r in self.results if not r.passed and r.level == "warning"]
-
-    @property
-    def passed(self) -> bool:
+    def is_valid(self) -> bool:
         return len(self.errors) == 0
 
 
-EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-
-
-def _check_type(value: str, expected_type: str) -> bool:
-    if expected_type == "integer":
-        try:
-            int(value)
-            return True
-        except ValueError:
+def _check_required(var_name: str, schema: VariableSchema, env: Dict[str, str], report: ValidationReport) -> bool:
+    """Returns True if the variable is present (or not required)."""
+    if var_name not in env or env[var_name] == "":
+        if schema.required:
+            report.add_error(var_name, "Missing required variable")
             return False
-    if expected_type == "float":
-        try:
-            float(value)
-            return True
-        except ValueError:
+        elif schema.default is None:
+            report.add_warning(var_name, "Optional variable is not set and has no default")
             return False
-    if expected_type == "boolean":
-        return value.lower() in {"true", "false", "1", "0", "yes", "no"}
-    if expected_type == "url":
-        parsed = urlparse(value)
-        return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
-    if expected_type == "email":
-        return bool(EMAIL_RE.match(value))
-    return True  # string accepts anything
+    return True
 
 
-def validate(env_vars: dict[str, str], schema: EnvSchema) -> ValidationReport:
+def _check_pattern(var_name: str, schema: VariableSchema, value: str, report: ValidationReport) -> None:
+    if schema.pattern and not re.fullmatch(schema.pattern, value):
+        report.add_warning(
+            var_name,
+            f"Value does not match expected pattern '{schema.pattern}'",
+        )
+
+
+def _check_allowed_values(var_name: str, schema: VariableSchema, value: str, report: ValidationReport) -> None:
+    if schema.allowed_values and value not in schema.allowed_values:
+        allowed = ", ".join(schema.allowed_values)
+        report.add_error(
+            var_name,
+            f"Value '{value}' is not one of the allowed values: [{allowed}]",
+        )
+
+
+def validate(env: Dict[str, str], schema: EnvSchema) -> ValidationReport:
+    """Validate a parsed env dictionary against an EnvSchema."""
     report = ValidationReport()
-    env_keys = set(env_vars.keys())
 
-    for var_schema in schema.variables:
-        name = var_schema.name
-
-        if name not in env_keys:
-            if var_schema.required and var_schema.default is None:
-                report.results.append(ValidationResult(name, False, f"Required variable '{name}' is missing."))
-            else:
-                report.results.append(ValidationResult(name, True, f"'{name}' not set; default will be used.", level="warning"))
+    for var_name, var_schema in schema.variables.items():
+        present = _check_required(var_name, var_schema, env, report)
+        if not present:
             continue
 
-        value = env_vars[name]
+        value = env.get(var_name, var_schema.default or "")
+        _check_pattern(var_name, var_schema, value, report)
+        _check_allowed_values(var_name, var_schema, value, report)
 
-        if not _check_type(value, var_schema.type):
-            report.results.append(ValidationResult(name, False, f"'{name}' expected type '{var_schema.type}', got value '{value}'."))
-            continue
-
-        if var_schema.pattern and not re.fullmatch(var_schema.pattern, value):
-            report.results.append(ValidationResult(name, False, f"'{name}' does not match pattern '{var_schema.pattern}'."))
-            continue
-
-        if var_schema.allowed_values and value not in var_schema.allowed_values:
-            report.results.append(ValidationResult(name, False, f"'{name}' value '{value}' not in allowed values: {var_schema.allowed_values}."))
-            continue
-
-        report.results.append(ValidationResult(name, True, f"'{name}' is valid."))
+        if not report.errors or report.errors[-1].variable != var_name:
+            if not report.warnings or report.warnings[-1].variable != var_name:
+                report.add_passed(var_name)
 
     return report
