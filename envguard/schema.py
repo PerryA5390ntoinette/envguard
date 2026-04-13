@@ -53,5 +53,17 @@ class EnvSchema:
         if not schema_path.exists():
             raise FileNotFoundError(f"Schema file not found: {schema_path}")
         with schema_path.open() as f:
-            data = json.load(f)
+            try:
+                data = json.load(f)
+            except json.JSONDecodeError as e:
+                raise ValueError(
+                    f"Schema file '{schema_path}' contains invalid JSON: {e}"
+                ) from e
         return cls.from_dict(data)
+
+    def get_variable(self, name: str) -> Optional[VariableSchema]:
+        """Return the VariableSchema for the given variable name, or None if not found."""
+        for variable in self.variables:
+            if variable.name == name:
+                return variable
+        return None
