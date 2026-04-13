@@ -1,56 +1,69 @@
-"""High-level pipeline that loads, interpolates, and audits an .env file."""
-from __future__ import annotations
-
+"""Orchestrates the full envguard pipeline from load to score."""
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Dict, Optional
 
-from envguard.loader import load_env_files
 from envguard.schema import EnvSchema
-from envguard.interpolator import InterpolationReport, interpolate
-from envguard.auditor import ValidationReport, audit
-from envguard.suggester import SuggestionReport, generate_suggestions
+from envguard.loader import load_env_file
+from envguard.interpolator import interpolate, InterpolationReport
+from envguard.auditor import audit
+from envguard.validator import ValidationReport
+from envguard.linter import lint, LintReport
+from envguard.redactor import redact_env, RedactionReport
+from envguard.scorer import compute_score, ScoreReport
 
 
 @dataclass
 class PipelineResult:
-    env_files: List[str] = field(default_factory=list)
-    raw_env: dict = field(default_factory=dict)
-    interpolation: Optional[InterpolationReport] = None
-    validation: Optional[ValidationReport] = None
-    suggestions: Optional[SuggestionReport] = None
+    raw_env: Dict[str, str] = field(default_factory=dict)
+    interpolation_report: Optional[InterpolationReport] = None
+    validation_report: Optional[ValidationReport] = None
+    lint_report: Optional[LintReport] = None
+    redaction_report: Optional[RedactionReport] = None
+    score_report: Optional[ScoreReport] = None
 
-    @property
     def success(self) -> bool:
-        if self.validation is None:
+        if self.validation_report and self.validation_report.has_errors():
             return False
-        return not self.validation.has_errors
+        if self.lint_report and self.lint_report.error_count() > 0:
+            return False
+        return True
 
 
 def run_pipeline(
-    env_paths: List[str],
+    env_path: str,
     schema: EnvSchema,
-    *,
-    interpolate_values: bool = True,
+    interpolate_vars: bool = True,
+    score: bool = True,
 ) -> PipelineResult:
-    """Load env files, optionally interpolate, then audit against *schema*.
+    result = PipelineResult()
 
-    Returns a :class:`PipelineResult` with all intermediate artefacts.
-    """
-    result = PipelineResult(env_files=list(env_paths))
+    result.raw_env = load_env_file(env_path)
 
-    raw = load_env_files(env_paths)
-    result.raw_env = raw
+    env = dict(result.raw_env)
 
-    if interpolate_values:
-        interp_report = interpolate(raw)
-        result.interpolation = interp_report
-        effective_env = interp_report.resolved
-    else:
-        effective_env = raw
+    if interpolate_vars:
+        interp = interpolate(env)
+        result.interpolation_report = interp
+        env = interp.resolved
 
-    validation_report = audit(effective_env, schema)
-    result.validation = validation_report
+    result.validation_report = audit(env, schema)
 
-    result.suggestions = generate_suggestions(validation_report)
+    with open(env_path, "r", encoding="utf-8") as fh:
+        lines = fh.readlines()
+    result.lint_report = lint(lines)
+
+    result.redaction_report = redact_env(env)
+
+    if score:
+        vr = result.validation_report
+        lr = result.lint_report
+        rr = result.redaction_report
+        result.score_report = compute_score(
+            audit_errors=vr.error_count() if vr else 0,
+            audit_warnings=vr.warning_count() if vr else 0,
+            lint_errors=lr.error_count() if lr else 0,
+            lint_warnings=lr.warning_count() if lr else 0,
+            exposed_secrets=rr.redaction_count() if rr else 0,
+        )
 
     return result
