@@ -55,6 +55,24 @@ class ClassificationReport:
             result.setdefault(entry.inferred_type, []).append(entry.key)
         return result
 
+    def summary(self) -> str:
+        """Return a human-readable summary of the classification report.
+
+        Example output::
+
+            10 variables (3 sensitive). Types: boolean=2, integer=1, string=7
+        """
+        type_counts = {
+            t: len(keys) for t, keys in self.by_type().items()
+        }
+        type_summary = ", ".join(
+            f"{t}={count}" for t, count in sorted(type_counts.items())
+        )
+        return (
+            f"{self.total} variables ({self.sensitive_count} sensitive). "
+            f"Types: {type_summary}"
+        )
+
     @property
     def sensitive_count(self) -> int:
         return sum(1 for e in self.entries if e.sensitive)
