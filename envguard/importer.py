@@ -34,7 +34,15 @@ def import_from_shell(
     keys: Optional[List[str]] = None,
     prefix: Optional[str] = None,
 ) -> Tuple[Dict[str, str], ImportReport]:
-    """Import variables from the current shell environment."""
+    """Import variables from the current shell environment.
+
+    Args:
+        keys: If provided, only import variables whose names are in this list.
+        prefix: If provided, only import variables whose names start with this prefix.
+
+    Returns:
+        A tuple of (env dict, ImportReport).
+    """
     report = ImportReport()
     env: Dict[str, str] = {}
 
@@ -56,28 +64,46 @@ def import_from_json(
     path: str,
     prefix: Optional[str] = None,
 ) -> Tuple[Dict[str, str], ImportReport]:
-    """Import variables from a JSON file (flat key-value object)."""
+    """Import variables from a JSON file (flat key-value object).
+
+    Args:
+        path: Path to the JSON file to read.
+        prefix: If provided, only import keys that start with this prefix.
+
+    Raises:
+        ValueError: If the JSON file does not contain a top-level object, or if
+            a key is not a string.
+
+    Returns:
+        A tuple of (env dict, ImportReport).
+    """
     report = ImportReport()
     env: Dict[str, str] = {}
 
-    with open(path, "r", encoding="utf-8") as fh:
-        data = json.load(fh)
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid JSON in {path!r}: {exc}") from exc
 
     if not isinstance(data, dict):
         raise ValueError(f"Expected a JSON object at the top level in {path!r}")
 
     for k, v in data.items():
+        if not isinstance(k, str):
+            raise ValueError(
+                f"All keys in {path!r} must be strings; got {type(k).__name__!r}"
+            )
         if not isinstance(v, (str, int, float, bool)):
             report.skipped.append(k)
             continue
-        if prefix is not None and not str(k).startswith(prefix):
+        if prefix is not None and not k.startswith(prefix):
             report.skipped.append(k)
             continue
-        str_key = str(k)
         str_val = str(v)
-        entry = ImportEntry(key=str_key, value=str_val, source="json")
+        entry = ImportEntry(key=k, value=str_val, source="json")
         report.entries.append(entry)
-        env[str_key] = str_val
+        env[k] = str_val
 
     return env, report
 
