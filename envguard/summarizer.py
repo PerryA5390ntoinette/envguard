@@ -1,58 +1,92 @@
-"""Summarizer: produces a high-level human-readable summary of a pipeline result."""
+"""Summarizer — condenses a PipelineResult into a single-line SummaryReport."""
+
+from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import List
 
-from envguard.pipeline import PipelineResult
-
 
 @dataclass
 class SummaryLine:
-    icon: str
-    label: str
-    value: str
-
-
-@dataclass
-class SummaryReport:
     source: str
-    lines: List[SummaryLine] = field(default_factory=list)
+    variables_loaded: int
+    audit_errors: int
+    audit_warnings: int
+    audit_passed: int
+    lint_issues: int
+    interpolation_warnings: int
 
-    def add(self, icon: str, label: str, value: str) -> None:
-        self.lines.append(SummaryLine(icon=icon, label=label, value=value))
+
+class SummaryReport:
+    def __init__(self) -> None:
+        self._lines: List[SummaryLine] = []
+
+    def add(self, line: SummaryLine) -> None:
+        self._lines.append(line)
+
+    # Aggregate helpers — sum across all lines for multi-source use
+    @property
+    def source(self) -> str:
+        if not self._lines:
+            return "unknown"
+        return self._lines[0].source
+
+    @property
+    def variables_loaded(self) -> int:
+        return sum(l.variables_loaded for l in self._lines)
+
+    @property
+    def audit_errors(self) -> int:
+        return sum(l.audit_errors for l in self._lines)
+
+    @property
+    def audit_warnings(self) -> int:
+        return sum(l.audit_warnings for l in self._lines)
+
+    @property
+    def audit_passed(self) -> int:
+        return sum(l.audit_passed for l in self._lines)
+
+    @property
+    def lint_issues(self) -> int:
+        return sum(l.lint_issues for l in self._lines)
+
+    @property
+    def interpolation_warnings(self) -> int:
+        return sum(l.interpolation_warnings for l in self._lines)
 
 
-def summarize(result: PipelineResult) -> SummaryReport:
+def summarize(pipeline_result: object) -> SummaryReport:
     """Build a SummaryReport from a PipelineResult."""
-    source = ", ".join(result.sources) if result.sources else "<unknown>"
-    report = SummaryReport(source=source)
+    report = SummaryReport()
 
-    total_vars = len(result.raw_env)
-    report.add("📦", "Variables loaded", str(total_vars))
+    sources = getattr(pipeline_result, "sources", [])
+    source_label = sources[0] if sources else "unknown"
 
-    audit = result.audit_report
-    if audit is not None:
-        errors = len([r for r in audit.results if r.status == "error"])
-        warnings = len([r for r in audit.results if r.status == "warning"])
-        passed = len([r for r in audit.results if r.status == "pass"])
-        report.add("❌", "Audit errors", str(errors))
-        report.add("⚠️ ", "Audit warnings", str(warnings))
-        report.add("✅", "Audit passed", str(passed))
+    raw_env = getattr(pipeline_result, "raw_env", {}) or {}
+    variables_loaded = len(raw_env)
 
-    interp = result.interpolation_report
-    if interp is not None:
-        warn_count = len(interp.warnings)
-        report.add("🔗", "Interpolation warnings", str(warn_count))
+    audit_report = getattr(pipeline_result, "audit_report", None)
+    audit_errors = len(audit_report.errors) if audit_report else 0
+    audit_warnings = len(audit_report.warnings) if audit_report else 0
+    audit_passed = len(audit_report.passed) if audit_report else 0
 
-    lint = result.lint_report
-    if lint is not None:
-        lint_errors = lint.error_count()
-        lint_warnings = lint.warning_count()
-        report.add("🔍", "Lint errors", str(lint_errors))
-        report.add("🔍", "Lint warnings", str(lint_warnings))
+    lint_report = getattr(pipeline_result, "lint_report", None)
+    lint_issues = lint_report.error_count() if lint_report else 0
 
-    score = result.score_report
-    if score is not None:
-        report.add("🏆", "Score", f"{score.score}/100 (Grade {score.grade})")
+    interp_report = getattr(pipeline_result, "interpolation_report", None)
+    interp_warnings = (
+        len(interp_report.warnings) if interp_report else 0
+    )
 
+    line = SummaryLine(
+        source=source_label,
+        variables_loaded=variables_loaded,
+        audit_errors=audit_errors,
+        audit_warnings=audit_warnings,
+        audit_passed=audit_passed,
+        lint_issues=lint_issues,
+        interpolation_warnings=interp_warnings,
+    )
+    report.add(line)
     return report
