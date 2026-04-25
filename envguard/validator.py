@@ -36,6 +36,11 @@ class ValidationReport:
         return len(self.errors) == 0
 
 
+def _has_error_for(var_name: str, report: ValidationReport) -> bool:
+    """Return True if the report already contains an error for the given variable."""
+    return any(e.variable == var_name for e in report.errors)
+
+
 def _check_required(var_name: str, schema: VariableSchema, env: Dict[str, str], report: ValidationReport) -> bool:
     """Returns True if the variable is present (or not required)."""
     if var_name not in env or env[var_name] == "":
@@ -78,8 +83,7 @@ def validate(env: Dict[str, str], schema: EnvSchema) -> ValidationReport:
         _check_pattern(var_name, var_schema, value, report)
         _check_allowed_values(var_name, var_schema, value, report)
 
-        if not report.errors or report.errors[-1].variable != var_name:
-            if not report.warnings or report.warnings[-1].variable != var_name:
-                report.add_passed(var_name)
+        if not _has_error_for(var_name, report):
+            report.add_passed(var_name)
 
     return report
